@@ -57,6 +57,9 @@ place "$KIT/hooks/prevent-default-branch-edits.sh" .claude/hooks/prevent-default
 place "$KIT/hooks/post-edit.sh"                    .claude/hooks/post-edit.sh
 place "$KIT/settings/settings.json"                .claude/settings.json
 place "$KIT/settings/settings.local.json.example"  .claude/settings.local.json.example
+place "$KIT/agent-files/skills/ai-coding-workflow/SKILL.md" .agents/skills/ai-coding-workflow/SKILL.md
+place "$KIT/agent-files/rules/working-agreement.md"          .agents/rules/working-agreement.md
+place "$KIT/agent-files/workflows/develop.md"                .agents/workflows/develop.md
 [ -n "$DRY" ] || chmod +x .claude/hooks/*.sh 2>/dev/null || true
 
 # Gitignore entries for the two personal files. Both are auto-loaded by the agent and
@@ -85,6 +88,7 @@ Next:
   3. Put anything machine-specific in CLAUDE.local.md, not AGENTS.md.
   4. Run `aikit-check` to confirm the docs match the code.
   5. Run `aikit-context` to confirm the agent actually loads them.
+  6. In Codex, invoke `$ai-coding-workflow`. In Antigravity, invoke `/develop`.
 
 Leave the @AGENTS.md line in CLAUDE.md alone — when CLAUDE.md exists, it is the only
 thing pulling AGENTS.md into Claude Code's context.
