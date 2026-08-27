@@ -1,13 +1,14 @@
 # AI Coding Kit
 
-一套小型、可移植的 AI coding agent 文件框架。它把跨工具共用的工作約定放在
-`AGENTS.md`，以精簡的 `CLAUDE.md` bridge 讓 Claude Code 載入同一份內容，並將架構決策、
-踩雷紀錄與待辦分析分流到按需讀取的文件。
+一套小型、可移植的 AI coding agent 文件框架，支援 Claude Code、Codex 與
+Antigravity CLI。它把跨工具共用的工作約定放在 `AGENTS.md`，以精簡的 bridge 與
+workspace routing 讓三種工具遵循同一份內容，並將架構決策、踩雷紀錄與待辦分析分流到
+按需讀取的文件。
 
-A small, portable documentation framework for AI coding agents. It keeps the shared
-working agreement in `AGENTS.md`, uses a minimal `CLAUDE.md` bridge so Claude Code loads
-the same content, and routes architecture decisions, pitfalls, and task analysis to
-on-demand documents.
+A small, portable documentation framework for Claude Code, Codex, and Antigravity CLI.
+It keeps the shared working agreement in `AGENTS.md`, uses minimal bridges and workspace
+routing so all three tools follow the same source, and routes architecture decisions,
+pitfalls, and task analysis to on-demand documents.
 
 ## 核心概念 / Core ideas
 
@@ -27,6 +28,8 @@ on-demand documents.
 - Git
 - Python 3
 - Claude Code CLI（只有 `aikit-context` 需要 / required only by `aikit-context`）
+- Codex 或 Antigravity CLI（選用，依你實際使用的 agent / optional, according to
+  the agents you use）
 
 產生的 post-edit hook 會依專案語言選用已安裝的工具，例如 Go、Ruff/Pytest、
 Prettier/ESLint 或 Cargo；沒有安裝的 optional tool 會被略過。
@@ -83,12 +86,182 @@ After initialization:
 3. 將個人設定放入 `CLAUDE.local.md` 或複製
    `.claude/settings.local.json.example` 為 `.claude/settings.local.json`。
 4. 執行 `aikit-check`，再用 `aikit-context` 驗證 agent 實際載入哪些文件。
+5. 使用 Codex 時呼叫 `$ai-coding-workflow`；使用 Antigravity 時呼叫 `/develop`。
 
 1. Fill the placeholders in `AGENTS.md`, especially Behaviour Contracts.
 2. Put architectural rationale in `ARCHITECTURE.md` and known traps in `ERRORS.md`.
 3. Put personal settings in `CLAUDE.local.md`, or copy
    `.claude/settings.local.json.example` to `.claude/settings.local.json`.
 4. Run `aikit-check`, then use `aikit-context` to verify what the agent actually loads.
+5. Invoke `$ai-coding-workflow` in Codex or `/develop` in Antigravity.
+
+## 跨工具 workflow / Cross-agent workflow
+
+三種 agent 共用相同的交付邊界：先理解與確認 scope，在 feature branch 上以 test-first
+方式實作，執行 fresh verification，建立 local commit，然後停止等待人工 review。Push、
+pull request 或 deployment 都需要另外明確授權。
+
+All three agents share the same delivery boundary: understand and approve scope, work on
+a feature branch with test-first implementation, run fresh verification, create a local
+commit, and stop for human review. Pushing, opening a pull request, or deploying requires
+separate explicit approval.
+
+### 為什麼需要 bridge / Why bridges exist
+
+各 agent 的原生入口不同，但 project facts 不應複製三份。本 kit 將 `AGENTS.md` 設為
+single source of truth，再用最薄的 tool-specific file 導向它。
+
+Each agent has a different native entry point, but project facts should not be copied
+three times. This kit makes `AGENTS.md` the single source of truth and uses the thinnest
+possible tool-specific file to route each agent to it.
+
+```text
+                         PROJECT INSTRUCTION ROUTING
+
+  Claude Code                     Codex                    Antigravity
+       │                             │                          │
+       │ auto-load                   │ auto-load                │ workspace rule
+       ▼                             │                          ▼
+ ┌───────────┐                       │              ┌────────────────────────┐
+ │ CLAUDE.md │                       │              │ .agents/rules/         │
+ └─────┬─────┘                       │              │ working-agreement.md   │
+       │ @AGENTS.md                  │              └───────────┬────────────┘
+       │                             │                          │ read AGENTS.md
+       └──────────────────────┬──────┴──────────────────────────┘
+                              ▼
+                       ┌─────────────┐
+                       │  AGENTS.md  │  single source of truth
+                       └──────┬──────┘
+                              │ routes only when needed
+             ┌────────────────┼────────────────┐
+             ▼                ▼                ▼
+      ARCHITECTURE.md      ERRORS.md        TASKS.md
+      design rationale     known traps      planned work
+```
+
+### 工具能力比較 / Tool comparison
+
+| Capability | Claude Code | Codex | Antigravity CLI | This kit |
+|---|---|---|---|---|
+| Native persistent project instructions | `CLAUDE.md` | `AGENTS.md` | `.agents/rules/` | Shared facts live in `AGENTS.md` |
+| Route to shared instructions | `@AGENTS.md` import | Direct discovery | `working-agreement.md` rule | No duplicated project rules |
+| Repo-scoped reusable procedure | Claude-specific skills/commands | `.agents/skills/*/SKILL.md` | `.agents/skills/*/SKILL.md` | Codex and Antigravity share one skill |
+| Explicit workflow invocation | Normal request or Claude command | `$ai-coding-workflow` | `/develop` | Same delivery boundary |
+| Tool-specific enforcement | `.claude/hooks/` | Agent instructions plus repo tooling | Permission/review settings | Hooks never pretend to be cross-tool |
+| Personal machine configuration | `CLAUDE.local.md`, local settings | User-level Codex configuration | `~/.gemini/` configuration | Personal values remain gitignored |
+
+> Claude Code does not use the shared `.agents/skills` path in this kit. Its persistent
+> workflow boundary comes through `CLAUDE.md → AGENTS.md`, while mechanical enforcement
+> comes from `.claude/hooks/`. Codex and Antigravity share the actual `SKILL.md`.
+
+### Workflow 如何被觸發 / Workflow invocation
+
+```text
+ Claude Code
+ ───────────
+ normal coding request
+        │
+        ▼
+ CLAUDE.md ──> AGENTS.md ──> project commands + contracts
+        │
+        └──────────────────> .claude/hooks enforce branch/edit checks
+
+
+ Codex
+ ─────
+ $ai-coding-workflow
+        │
+        ▼
+ .agents/skills/ai-coding-workflow/SKILL.md
+        │
+        └──────────────────> follows AGENTS.md + shared delivery workflow
+
+
+ Antigravity CLI
+ ───────────────
+ /develop <request>
+        │
+        ▼
+ .agents/workflows/develop.md
+        │ routes to
+        ▼
+ .agents/skills/ai-coding-workflow/SKILL.md
+        │
+        └──────────────────> .agents/rules/working-agreement.md ──> AGENTS.md
+```
+
+### 共用交付流程 / Shared delivery lifecycle
+
+```text
+┌──────────────┐
+│ User request │
+└──────┬───────┘
+       ▼
+┌──────────────────────────┐
+│ Read guidance + inspect  │
+│ repo and existing changes│
+└────────────┬─────────────┘
+             ▼
+      ┌─────────────┐       unclear / scope-changing
+      │ Scope clear?├──────────────────────────────┐
+      └──────┬──────┘                              │
+             │ yes                                 ▼
+             ▼                              ┌───────────────┐
+┌──────────────────────────┐                │ Ask the human │
+│ Present approach and get │◀───────────────┤ for direction │
+│ approval when required   │                └───────────────┘
+└────────────┬─────────────┘
+             ▼
+┌──────────────────────────┐
+│ Create focused branch    │
+└────────────┬─────────────┘
+             ▼
+┌──────────────────────────┐
+│ RED: write failing test  │
+│ and observe the failure  │
+└────────────┬─────────────┘
+             ▼
+┌──────────────────────────┐
+│ GREEN: minimal change    │
+└────────────┬─────────────┘
+             ▼
+┌──────────────────────────┐
+│ Fresh verification       │
+│ tests + lint + full diff │
+└────────────┬─────────────┘
+             ▼
+      ┌─────────────┐       no
+      │ All green?  ├──────────────> diagnose / fix / verify again
+      └──────┬──────┘
+             │ yes
+             ▼
+┌──────────────────────────┐
+│ Focused local commit     │
+└────────────┬─────────────┘
+             ▼
+┌──────────────────────────┐
+│ STOP for human review    │
+└────────────┬─────────────┘
+             ▼ explicit approval only
+┌──────────────────────────┐
+│ Push / PR / deploy       │
+└──────────────────────────┘
+```
+
+「完成 implementation」不等於「取得 publish 權限」。即使測試全部通過，agent 仍應在
+local commit 後停止；push、PR 和 deployment 是各自獨立的 external mutation。
+
+“Implementation complete” does not mean “authorized to publish.” Even with a green test
+suite, the agent stops after the local commit; push, PR creation, and deployment are
+separate external mutations.
+
+Codex 官方文件說明 repo guidance 使用 `AGENTS.md`，repo skills 使用
+`.agents/skills/`。Google 的 Antigravity 文件也指定 workspace skills 使用
+`.agents/skills/`，並以 `.agents/rules/` 和 `.agents/workflows/` 提供 workspace
+customization。
+
+Official references: [Codex customization](https://learn.chatgpt.com/docs/customization/overview)
+and [Antigravity workspace customization](https://codelabs.developers.google.com/getting-started-agy-ide#8).
 
 ## 指令 / Commands
 
@@ -136,18 +309,27 @@ seconds.
 ## 產生的結構 / Generated layout
 
 ```text
-AGENTS.md
-CLAUDE.md
-CLAUDE.local.md                  # gitignored
-ARCHITECTURE.md
-ERRORS.md
-TASKS.md
-.claude/
-  hooks/
-    prevent-default-branch-edits.sh
-    post-edit.sh
-  settings.json
-  settings.local.json.example
+repository/
+├── AGENTS.md                         # shared project working agreement
+├── CLAUDE.md                         # Claude bridge: @AGENTS.md
+├── CLAUDE.local.md                   # personal, gitignored
+├── ARCHITECTURE.md                   # why the system is shaped this way
+├── ERRORS.md                         # traps worth remembering
+├── TASKS.md                          # analysed but unimplemented work
+├── .claude/
+│   ├── hooks/
+│   │   ├── prevent-default-branch-edits.sh
+│   │   └── post-edit.sh
+│   ├── settings.json                 # shared Claude hook wiring
+│   └── settings.local.json.example   # personal config example
+└── .agents/
+    ├── rules/
+    │   └── working-agreement.md      # Antigravity → AGENTS.md
+    ├── skills/
+    │   └── ai-coding-workflow/
+    │       └── SKILL.md              # Codex + Antigravity workflow
+    └── workflows/
+        └── develop.md                # Antigravity /develop command
 ```
 
 `prevent-default-branch-edits.sh` 阻擋 agent 在 default branch 直接 Edit/Write；
@@ -156,6 +338,63 @@ TASKS.md
 `prevent-default-branch-edits.sh` blocks agent Edit/Write operations on the default
 branch. `post-edit.sh` runs available formatting, linting, and tests after supported
 source files are changed.
+
+## 文件應該放哪裡？ / Where should guidance live?
+
+先依「是否每次都必須知道」分類，再依用途選擇檔案。不要因為三個 agent 有三種入口就
+複製三份相同內容。
+
+Classify guidance by whether every task needs it, then choose a destination by purpose.
+Do not copy the same rule three times merely because the agents have different entry
+points.
+
+```text
+New guidance or knowledge
+│
+├─ Must every agent know it before touching code?
+│  └─ yes ──> AGENTS.md
+│             examples: commands, invariants, conventions, routing table
+│
+├─ Is it a repeatable multi-step procedure?
+│  └─ yes ──> .agents/skills/<name>/SKILL.md
+│             Codex: $name     Antigravity: skill discovery
+│
+├─ Should it be an Antigravity slash command?
+│  └─ yes ──> .agents/workflows/<command>.md
+│             keep it thin; route to a shared skill
+│
+├─ Does it explain why the architecture exists?
+│  └─ yes ──> ARCHITECTURE.md
+│
+├─ Is it a non-obvious trap already encountered?
+│  └─ yes ──> ERRORS.md
+│
+├─ Is it planned work with analysed options?
+│  └─ yes ──> TASKS.md
+│
+└─ Is it personal, secret, or machine-specific?
+   └─ yes ──> CLAUDE.local.md or local settings (gitignored)
+```
+
+### One fact, one place
+
+```text
+GOOD                                      BAD
+────                                      ───
+AGENTS.md                                 AGENTS.md
+  └─ canonical invariant                   └─ invariant copy A
+
+CLAUDE.md                                 CLAUDE.md
+  └─ @AGENTS.md bridge                     └─ invariant copy B
+
+.agents/rules/working-agreement.md        GEMINI.md / workspace rule
+  └─ route to AGENTS.md                    └─ invariant copy C
+
+Result: one update                       Result: silent drift
+```
+
+Bridge files state where canonical guidance lives. They should not become alternative
+copies of that guidance.
 
 ## 開發與驗證 / Development and verification
 
@@ -173,11 +412,15 @@ session, so it is not part of the fast test suite.
 ## 限制 / Limitations
 
 - Hooks 與 settings 使用 Claude Code 的格式；其他 agent 仍可直接使用 `AGENTS.md`。
+- Antigravity 的 `/develop` 是 workspace workflow；Codex 應使用
+  `$ai-coding-workflow` 呼叫同一個 skill。
 - `aikit-check` 驗證可被機械判定的文件宣告，但不能判斷文字內容是否完整或正確。
 - `aikit-context` 的載入規則是實測的 implementation detail；Claude Code 升級後請重新
   執行 `--isolated`。
 - Hooks and settings use Claude Code's format; other agents can still consume
   `AGENTS.md` directly.
+- `/develop` is an Antigravity workspace workflow; Codex invokes the same underlying
+  skill as `$ai-coding-workflow`.
 - `aikit-check` validates mechanically falsifiable claims, not prose completeness.
 - Context-loading behavior is measured implementation detail; rerun `--isolated` after
   Claude Code upgrades.

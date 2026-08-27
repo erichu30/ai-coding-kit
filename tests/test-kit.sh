@@ -66,11 +66,27 @@ test_init_scaffolds_without_overwriting_existing_files() {
   ok "aikit-init creates an executable, safely ignored scaffold"
 }
 
+test_init_scaffolds_shared_codex_antigravity_workflow() {
+  local repo="$TEST_ROOT/multi-agent"
+  git init -q "$repo"
+
+  "$KIT/bin/aikit-init" "$repo" >/dev/null
+
+  if [ ! -f "$repo/.agents/skills/ai-coding-workflow/SKILL.md" ] ||
+     [ ! -f "$repo/.agents/rules/working-agreement.md" ] ||
+     [ ! -f "$repo/.agents/workflows/develop.md" ]; then
+    not_ok "aikit-init scaffolds the shared Codex and Antigravity workflow"
+    return
+  fi
+  ok "aikit-init scaffolds the shared Codex and Antigravity workflow"
+}
+
 test_fresh_scaffold_passes_aikit_check() {
   local repo="$TEST_ROOT/check"
   git init -q "$repo"
   "$KIT/bin/aikit-init" "$repo" >/dev/null
-  git -C "$repo" add AGENTS.md CLAUDE.md ARCHITECTURE.md ERRORS.md TASKS.md .claude/settings.json
+  git -C "$repo" add AGENTS.md CLAUDE.md ARCHITECTURE.md ERRORS.md TASKS.md \
+    .claude/settings.json .agents
 
   if "$KIT/bin/aikit-check" "$repo" >/dev/null; then
     ok "a fresh scaffold passes aikit-check"
@@ -82,6 +98,7 @@ test_fresh_scaffold_passes_aikit_check() {
 test_init_rejects_unknown_options
 test_context_does_not_require_timeout_binary
 test_init_scaffolds_without_overwriting_existing_files
+test_init_scaffolds_shared_codex_antigravity_workflow
 test_fresh_scaffold_passes_aikit_check
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

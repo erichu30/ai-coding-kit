@@ -79,6 +79,12 @@ software that quietly does the wrong thing.
 {{TEST_COMMAND}}
 ```
 
+## Agent Workflow
+
+For features, bugfixes, refactors, and other repository changes, use the shared
+`ai-coding-workflow` skill. In Codex, invoke `$ai-coding-workflow`; in Antigravity,
+invoke `/develop`.
+
 <!-- If CI runs in an environment that differs from a developer machine — no optional
      binaries, a different OS — say how to reproduce it. That gap is where bugs slip
      through green local runs. -->
