@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Scaffold the agent-docs layout into a repository.
+# Never overwrites an existing file; reports what it skipped.
+set -euo pipefail
+
+KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TARGET=""
+DRY=""
+
+usage() {
+  echo "Usage: aikit-init [--dry-run] [repository]" >&2
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY=1 ;;
+    -*) usage; echo "Unknown option: $arg" >&2; exit 2 ;;
+    *)
+      if [ -n "$TARGET" ]; then
+        usage
+        echo "Only one repository path may be provided." >&2
+        exit 2
+      fi
+      TARGET="$arg"
+      ;;
+  esac
+done
+TARGET="${TARGET:-$PWD}"
+
+[ -d "$TARGET" ] || { echo "No such directory: $TARGET" >&2; exit 1; }
+cd "$TARGET"
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "Not a git repository: $TARGET" >&2; exit 1; }
+
+echo "Target: $TARGET"
+[ -n "$DRY" ] && echo "(dry run — nothing will be written)"
+echo
+
+wrote=0 skipped=0
+place() { # src dst
+  local src="$1" dst="$2"
+  if [ -e "$dst" ]; then
+    printf '  skip   %-34s (exists)\n' "$dst"; skipped=$((skipped+1)); return
+  fi
+  printf '  write  %s\n' "$dst"; wrote=$((wrote+1))
+  [ -n "$DRY" ] && return
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+}
+
+place "$KIT/templates/AGENTS.md"       AGENTS.md
+place "$KIT/templates/CLAUDE.md"       CLAUDE.md
+place "$KIT/templates/CLAUDE.local.md" CLAUDE.local.md
+place "$KIT/templates/ARCHITECTURE.md" ARCHITECTURE.md
+place "$KIT/templates/ERRORS.md"       ERRORS.md
+place "$KIT/templates/TASKS.md"        TASKS.md
+place "$KIT/hooks/prevent-default-branch-edits.sh" .claude/hooks/prevent-default-branch-edits.sh
+place "$KIT/hooks/post-edit.sh"                    .claude/hooks/post-edit.sh
+place "$KIT/settings/settings.json"                .claude/settings.json
+place "$KIT/settings/settings.local.json.example"  .claude/settings.local.json.example
+[ -n "$DRY" ] || chmod +x .claude/hooks/*.sh 2>/dev/null || true
+
+# Gitignore entries for the two personal files. Both are auto-loaded by the agent and
+# neither belongs in version control.
+echo
+for entry in "CLAUDE.local.md" ".claude/settings.local.json"; do
+  if [ -f .gitignore ] && grep -qxF "$entry" .gitignore; then
+    printf '  skip   .gitignore %-24s (present)\n' "$entry"
+  else
+    printf '  add    .gitignore %s\n' "$entry"
+    [ -n "$DRY" ] || printf '%s\n' "$entry" >> .gitignore
+  fi
+done
+
+echo
+echo "$wrote written, $skipped skipped."
+[ -n "$DRY" ] && exit 0
+
+cat <<'NEXT'
+
+Next:
+  1. Fill in AGENTS.md. The {{PLACEHOLDERS}} and HTML comments say what each section is
+     for; delete the comments as you go.
+  2. Behaviour Contracts is the section worth the most and the one people skip. Write
+     down the rules whose violation would NOT fail a test.
+  3. Put anything machine-specific in CLAUDE.local.md, not AGENTS.md.
+  4. Run `aikit-check` to confirm the docs match the code.
+  5. Run `aikit-context` to confirm the agent actually loads them.
+
+Leave the @AGENTS.md line in CLAUDE.md alone — when CLAUDE.md exists, it is the only
+thing pulling AGENTS.md into Claude Code's context.
+NEXT

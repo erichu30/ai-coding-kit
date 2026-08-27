@@ -1,0 +1,10 @@
+{
+  "_comment": "Copy to .claude/settings.local.json. Gitignored. Personal permissions, personal tooling hooks, machine-specific config. Nothing here should be needed by a teammate.",
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(go test *)",
+      "Bash(go build *)"
+    ]
+  }
+}

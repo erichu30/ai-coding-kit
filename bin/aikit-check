@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Check the agent docs against reality.
+#
+# Prose does not check itself. These are the claims a script can falsify: dead links,
+# named files and symbols that no longer exist, personal paths in shared files, the
+# load-bearing @AGENTS.md import, and stale pasted --help output.
+set -uo pipefail
+
+cd "${1:-$PWD}"
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "Not a git repository." >&2; exit 1; }
+
+fail=0
+pass() { printf '  \033[32mok\033[0m    %s\n' "$1"; }
+bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; fail=$((fail+1)); }
+info() { printf '  --    %s\n' "$1"; }
+
+echo "Checking $(pwd)"
+echo
+
+# --- the load-bearing import ------------------------------------------------
+echo "Context wiring"
+if [ -f CLAUDE.md ] && [ -f AGENTS.md ]; then
+  if grep -qE '^\s*@AGENTS\.md\s*$' CLAUDE.md; then
+    pass "CLAUDE.md imports AGENTS.md"
+  else
+    bad "CLAUDE.md exists but does not import AGENTS.md — AGENTS.md is NOT being loaded"
+  fi
+elif [ -f AGENTS.md ]; then
+  pass "AGENTS.md with no CLAUDE.md (discovered natively)"
+else
+  bad "no AGENTS.md"
+fi
+
+# --- personal content in shared files ---------------------------------------
+echo
+echo "Shared files free of personal content"
+tracked_md=$(git ls-files '*.md' '.claude/settings.json' 2>/dev/null | grep -v '\.local\.md$' || true)
+if [ -z "$tracked_md" ]; then
+  info "no tracked docs yet"
+else
+  # A home directory path is unambiguous: it can only have come from one machine.
+  homes=$(grep -nE '/Users/[a-z]|/home/[a-z]' $tracked_md 2>/dev/null | grep -vE '/path/to/|<user>|\$HOME|~/' || true)
+  if [ -z "$homes" ]; then pass "no home directory paths"
+  else bad "home directory path in a tracked file:"; printf '        %s\n' "$homes"; fi
+
+  # A private IP is usually a documentation placeholder, sometimes a real host someone
+  # forgot to scrub. Only a human can tell, so warn rather than fail.
+  ips=$(grep -nE '\b(10|192\.168)\.[0-9]+\.[0-9]+\b|\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+\b' $tracked_md 2>/dev/null \
+        | grep -vE '192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|example\.' || true)
+  if [ -z "$ips" ]; then pass "no private IPs"
+  else info "private IPs present — confirm these are placeholders, not real hosts:"; printf '        %s\n' "$ips"; fi
+fi
+if [ -f CLAUDE.local.md ] && git ls-files --error-unmatch CLAUDE.local.md >/dev/null 2>&1; then
+  bad "CLAUDE.local.md is tracked — it should be gitignored"
+elif [ -f CLAUDE.local.md ]; then
+  pass "CLAUDE.local.md present and untracked"
+fi
+
+# --- links -------------------------------------------------------------------
+echo
+echo "Markdown links"
+python3 - <<'PY'
+import re, os, glob, sys
+bad = []
+for p in sorted(glob.glob('*.md')):
+    for m in re.finditer(r'\[([^\]]+)\]\(([^)]+)\)', open(p, encoding='utf-8', errors='replace').read()):
+        t = m.group(2).split('#')[0]
+        if not t or t.startswith(('http://', 'https://', 'mailto:')):
+            continue
+        if not os.path.exists(t):
+            bad.append(f"{p} -> {t}")
+if bad:
+    print("  \033[31mFAIL\033[0m  dead links:")
+    for b in bad: print(f"        {b}")
+    sys.exit(1)
+print("  \033[32mok\033[0m    all local links resolve")
+PY
+[ $? -ne 0 ] && fail=$((fail+1))
+
+# --- named files and symbols still exist -------------------------------------
+echo
+echo "Referenced files and symbols exist"
+missing_files=""
+for f in $(grep -ohE '`[A-Za-z0-9_./-]+\.(go|py|ts|tsx|js|rs|java|rb|sh)`' *.md 2>/dev/null | tr -d '`' | sort -u); do
+  base=$(basename "$f")
+  git ls-files | grep -qE "(^|/)${base}$" || missing_files="$missing_files $f"
+done
+if [ -z "$missing_files" ]; then pass "every referenced source file exists"
+else bad "referenced but not in the repo:$missing_files"; fi
+
+missing_syms=""
+for s in $(grep -ohE '`[a-z][A-Za-z0-9_]{4,}\(\)`' *.md 2>/dev/null | tr -d '`()' | sort -u); do
+  git grep -qwE "$s" -- '*.go' '*.py' '*.ts' '*.tsx' '*.js' '*.jsx' '*.rs' '*.java' '*.rb' 2>/dev/null || missing_syms="$missing_syms $s"
+done
+if [ -z "$missing_syms" ]; then pass "every referenced symbol exists"
+else bad "referenced but not found in source:$missing_syms"; fi
+
+# --- pasted CLI output ---------------------------------------------------------
+echo
+echo "Pasted CLI output"
+if grep -qiE 'usage:|^\s*-{1,2}[a-z-]+ ' README.md 2>/dev/null; then
+  info "README contains pasted CLI output — regenerate it from the binary rather than editing by hand"
+else
+  info "no pasted CLI output detected"
+fi
+
+echo
+if [ "$fail" -eq 0 ]; then echo "All checks passed."; else echo "$fail check(s) failed."; fi
+exit "$fail"

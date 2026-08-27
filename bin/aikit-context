@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Prove which files actually reach the agent's context.
+#
+# Reading a doc tells you what it says, not whether anything loaded it. This plants a
+# canary token, then asks a real agent for it back with every read tool disabled, so the
+# only way it can answer is from context that was already there.
+#
+# Two traps this avoids, both of which make the naive version lie:
+#   · leaving tools enabled — the agent opens the file and answers either way
+#   · prompting "without reading any files" — the model declines even when it does know
+#
+#   aikit-context             canary-test this repo's docs (restores them afterwards)
+#   aikit-context --isolated  clean-room test of the loading rules themselves
+set -uo pipefail
+
+command -v claude >/dev/null || { echo "claude CLI not found in PATH." >&2; exit 1; }
+
+Q="What is the token? Reply with only the token string, or NONE if you do not know it."
+
+# ask <dir> -> "<turns>|<result>"
+ask() {
+  local out
+  out=$(cd "$1" && python3 - "$Q" <<'PY'
+import subprocess
+import sys
+
+command = [
+    "claude", "-p", sys.argv[1],
+    "--disallowedTools", "Read", "Glob", "Grep", "Bash", "Task", "WebFetch", "WebSearch",
+    "--output-format", "json",
+]
+try:
+    result = subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    print(result.stdout, end="")
+except (OSError, subprocess.TimeoutExpired):
+    pass
+PY
+)
+  printf '%s' "$out" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+try:
+    obj, _ = json.JSONDecoder().raw_decode(raw)   # trailing output is common
+except Exception:
+    print('?|<no response>'); raise SystemExit
+print(f\"{obj.get('num_turns','?')}|{(obj.get('result') or '').strip().replace(chr(10),' ')[:60]}\")
+" 2>/dev/null || printf '?|<parse failed>'
+}
+
+report() { # label expected_token "turns|result"
+  local turns="${3%%|*}" res="${3#*|}"
+  if printf '%s' "$res" | grep -q "$2"; then
+    printf '  \033[32mLOADED    \033[0m %-32s turns=%s\n' "$1" "$turns"
+  else
+    printf '  \033[31mNOT LOADED\033[0m %-32s turns=%s  (%s)\n' "$1" "$turns" "$res"
+  fi
+}
+
+if [ "${1:-}" = "--isolated" ]; then
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  echo "Clean-room test of the loading rules — $tmp"
+  echo "Each case is a fresh directory containing only the files named."
+  echo
+
+  mkdir -p "$tmp"/{a,b,c,d,e}
+  printf '# AGENTS.md\nThe token is TOK-AAA.\n'        > "$tmp/a/AGENTS.md"
+  printf '# CLAUDE.md\nThe token is TOK-BBB.\n'        > "$tmp/b/CLAUDE.md"
+  printf '# AGENTS.md\nThe token is TOK-CCC.\n'        > "$tmp/c/AGENTS.md"
+  printf '# CLAUDE.md\nUnrelated.\n'                   > "$tmp/c/CLAUDE.md"
+  printf '# AGENTS.md\nThe token is TOK-DDD.\n'        > "$tmp/d/AGENTS.md"
+  printf '# CLAUDE.md\n\n@AGENTS.md\n'                 > "$tmp/d/CLAUDE.md"
+  printf '# CLAUDE.local.md\nThe token is TOK-EEE.\n'  > "$tmp/e/CLAUDE.local.md"
+
+  report "AGENTS.md alone"              TOK-AAA "$(ask "$tmp/a")"
+  report "CLAUDE.md alone"              TOK-BBB "$(ask "$tmp/b")"
+  report "both, CLAUDE.md w/o import"   TOK-CCC "$(ask "$tmp/c")"
+  report "CLAUDE.md with @AGENTS.md"    TOK-DDD "$(ask "$tmp/d")"
+  report "CLAUDE.local.md alone"        TOK-EEE "$(ask "$tmp/e")"
+  echo
+  echo "turns=1 means it answered straight from context. turns>1 means it went looking."
+  echo "Compare against docs/FINDINGS.md; a difference means the CLI changed."
+  exit 0
+fi
+
+cd "${1:-$PWD}"
+echo "Canary test — $(pwd)"
+echo "Each doc is temporarily given a token, then restored."
+echo
+
+for f in CLAUDE.md AGENTS.md CLAUDE.local.md; do
+  [ -f "$f" ] || { printf '  %-10s %s\n' "absent" "$f"; continue; }
+  token="TOK-$(od -An -N3 -tx1 < /dev/urandom | tr -d ' \n' | tr 'a-f' 'A-F')"
+  backup=$(mktemp); cp "$f" "$backup"
+  printf '\nThe token is %s.\n' "$token" >> "$f"
+  result=$(ask .)
+  cp "$backup" "$f"; rm -f "$backup"
+  report "$f" "$token" "$result"
+done
+
+echo
+echo "A doc that is NOT LOADED is invisible to the agent no matter what it says."
+echo "If AGENTS.md is not loaded, check that CLAUDE.md contains the line '@AGENTS.md'."

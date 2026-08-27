@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/prevent-default-branch-edits.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/post-edit.sh" }
+        ]
+      }
+    ]
+  }
+}
